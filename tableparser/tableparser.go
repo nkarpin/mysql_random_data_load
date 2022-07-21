@@ -52,6 +52,7 @@ type Index struct {
 	Unique     bool
 	Visible    bool
 	Expression string // MySQL 8.0.16+
+	Ignored    bool // MariaDB 10.6
 }
 
 // IndexField holds raw index information as defined in INFORMATION_SCHEMA table
@@ -70,6 +71,7 @@ type IndexField struct {
 	NonUnique    bool
 	Visible      string         // MySQL 8.0+
 	Expression   sql.NullString // MySQL 8.0.16+
+	Ignored      string // MariaDB 10.6
 }
 
 // Constraint holds Foreign Keys information
@@ -103,10 +105,11 @@ type Field struct {
 	Extra                  string
 	Privileges             string
 	ColumnComment          string
-	GenerationExpression   string
+	GenerationExpression   sql.NullString
 	SetEnumVals            []string
 	Constraint             *Constraint
 	SrsID                  sql.NullString
+        IsGenerated            string
 }
 
 // Trigger holds raw trigger information as defined in INFORMATION_SCHEMA
@@ -240,6 +243,9 @@ func makeScanRecipients(f *Field, allowNull *string, cols []string) []interface{
 	if len(cols) > 21 && cols[21] == "SRS_ID" { // MySQL 8.0+ "SRS ID" field
 		fields = append(fields, &f.SrsID)
 	}
+	if len(cols) >= 22 && cols[21] == "GENERATION_EXPRESSION" { // Mariadb 10.6
+		fields = append(fields, &f.IsGenerated, &f.GenerationExpression)
+	}
 
 	return fields
 }
@@ -264,7 +270,7 @@ func getIndexes(db *sql.DB, schema, tableName string) (map[string]Index, error) 
 
 	for rows.Next() {
 		var i IndexField
-		var table, visible string
+		var table, visible, ignored string
 		fields := []interface{}{&table, &i.NonUnique, &i.KeyName, &i.SeqInIndex,
 			&i.ColumnName, &i.Collation, &i.Cardinality, &i.SubPart,
 			&i.Packed, &i.Null, &i.IndexType, &i.Comment, &i.IndexComment,
@@ -273,6 +279,9 @@ func getIndexes(db *sql.DB, schema, tableName string) (map[string]Index, error) 
 		cols, err := rows.Columns()
 		if err == nil && len(cols) >= 14 && cols[13] == "Visible" {
 			fields = append(fields, &i.Visible)
+		}
+		if err == nil && len(cols) >= 14 && cols[13] == "Ignored" {
+			fields = append(fields, &i.Ignored)
 		}
 		if err == nil && len(cols) >= 15 && cols[14] == "Expression" {
 			fields = append(fields, &i.Expression)
@@ -289,6 +298,7 @@ func getIndexes(db *sql.DB, schema, tableName string) (map[string]Index, error) 
 				Fields:     []string{i.ColumnName},
 				Visible:    i.Visible == "YES" || visible == "",
 				Expression: i.Expression.String,
+				Ignored:    i.Ignored == "NO" || ignored == "",
 			}
 
 		} else {
